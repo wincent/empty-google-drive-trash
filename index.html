@@ -18,6 +18,7 @@
        * Check if the current user has authorized the application.
        */
       function checkAuth() {
+        console.log('checkAuth()');
         gapi.auth.authorize(
             {'client_id': CLIENT_ID, 'scope': SCOPES, 'immediate': true},
             handleAuthResult);
@@ -51,33 +52,35 @@
         *
         * @param {Function} callback Function to call when the request is complete.
         */
-      function retrieveAllFiles(callback) {
+      async function retrieveAllFiles(callback) {
+        console.log('retrieveAllFiles');
         window.filesToDelete = [];
         window.deletedFiles = [];
         window.filesRemaining = [];
         window.i = 0;
-        
-        var retrievePageOfFiles = function(request, result) {
-          request.execute(function(resp) {
+
+        var retrievePageOfFiles = async function(request, result) {
+          console.log('retrievePageOfFiles');
+          request.execute(async function(resp) {
           // Our current 1000 results
             result = result.concat(resp.items);
-            
+
           // Filter the current results
             for(var i = 0; i < result.length; i++) {
             // Double check that this file has been trashed and then that it's not a Google Doc
-              if (result[i].labels.trashed && result[i].mimeType.length > 0 && result[i].mimeType.search('google') === -1) {                          
+              if (result[i].labels.trashed && result[i].mimeType.length > 0 && result[i].mimeType.search('google') === -1) {
                 // add to list of files for deleting
                 filesToDelete.push(result[i]);
               }
               // add to the list of files that will remain
               else filesRemaining.push(result[i]);
             }
-            
+
           // Delete if any to delete
             if (filesToDelete.length > window.i) {
-              batchFileDelete();
+              await batchFileDelete();
             }
-            
+
           // Get the next 1000 results
             var nextPageToken = resp.nextPageToken;
             if (nextPageToken) {
@@ -87,8 +90,8 @@
                 maxResults: 1000,
                 q: "trashed=true"
               });
-              
-              retrievePageOfFiles(request, result);
+
+              await retrievePageOfFiles(request, result);
             } else {
               // all done
             }
@@ -99,42 +102,77 @@
           maxResults: 1000,
           q: "trashed=true"
         });
-        retrievePageOfFiles(initialRequest, []);
+        await retrievePageOfFiles(initialRequest, []);
       }
-      
+
       /**
         * Permanently delete a file, skipping the trash.
         *
         * @param {String} fileId ID of the file to delete.
         */
-      function deleteFile(fileId) {
+      async function deleteFile(fileId) {
+        console.log('delete ' + fileId);
         var request = gapi.client.drive.files.delete({
           'fileId': fileId
         });
-        request.execute(function(resp) { });
+        return new Promise((resolve, reject) => {
+          request.execute(function(response) {
+            if (response && response.result && Object.keys(response.result).length == 0) {
+              console.log('seemed to work');
+              resolve();
+            } else {
+              console.log(response);
+              if (response && response.code === 404) {
+                resolve();
+              } else {
+                console.log('- backoff ' + backoff);
+                reject(response);
+              }
+            }
+          });
+        });
       }
-      
-      function batchFileDelete() {
-        setTimeout(function () {
+
+      let backoff = 5000;
+      function delay(ms) {
+        return new Promise(resolve => {
+          setTimeout(resolve, ms);
+        });
+      }
+
+      async function batchFileDelete() {
+        console.log('batchFileDelete');
+        // setTimeout(function () {
         // delete 3 at time to stay within our rate limit
           for(var x = 0+i; x < 3+i; x++) {
             // store
             deletedFiles.push(filesToDelete[x]);
-            
+
             // delete it
-            deleteFile(filesToDelete[x].id);
+            if (filesToDelete[x]) {
+              try {
+                await deleteFile(filesToDelete[x].id);
+              } catch(e) {
+                await delay(backoff);
+                backoff += 1000;
+              }
+            } else {
+              console.warn('got undefined!');
+            }
           }
-          
+        console.log('waiting .3s');
+        await delay(300);
+
         // increment
           i+= 3;
-          
+
         // Set another timeout
           if (filesToDelete.length > window.i) {
-            batchFileDelete();
+            await batchFileDelete();
           }
-        }, 1000);
+        // }, 1000);
       }
-      
+
     </script>
     <script type="text/javascript" src="https://apis.google.com/js/client.js?onload=handleClientLoad"></script>
   </head>
